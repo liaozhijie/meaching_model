@@ -1,11 +1,10 @@
 def kmeans_xufive(ds, k, round):
-    """k-means聚类算法
-
-    k       - 指定分簇数量
-    ds      - ndarray(m, n)，m个样本的数据集，每个样本n个属性值
+    """
+    k       指定分簇数量
+    ds      ndarray(m, n)，m个样本的数据集，每个样本n个属性值
     """
 
-    m, n = ds.shape  # m：样本数量，n：每个样本的属性值个数
+    m, n = ds.shape  
     result = np.empty(m, dtype=np.int)  # m个样本的聚类结果
     cores = ds[np.random.choice(np.arange(m), k, replace=False)]  # 从m个数据样本中不重复地随机选择k个样本作为质心
 
