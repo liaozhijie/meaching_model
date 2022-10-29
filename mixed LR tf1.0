@@ -1,0 +1,47 @@
+def train_and_test(train_data,test_data,m=2,learning_rate=0.1):
+
+# m=2: 分片参数为2
+
+    train_y= train_data['label']
+    train_x=train_data.drop('label',axis=1)
+    test_y= test_data['label']
+    test_x=test_data.drop('label',axis=1)
+
+    x=tf.placeholder(tf.float32,shape=[None,108])#特征向量维度为108
+    y=tf.placeholder(tf.float32,shape=[None])
+    
+
+    u=tf.Variable(tf.random_normal([108,m],0.0,0.5),name='u')
+    w=tf.Variable(tf.random_normal([108,m],0.0,0.5),name='w')
+
+    U=tf.matmul(x,u)
+    p1=tf.nn.softmax(U)
+
+    W=tf.matmul(x,w)
+    p2=tf.nn.sigmoid(W)
+
+    pred=tf.reduce_sum(tf.multiply(p1,p2),axis=1)
+    cost1=tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(logits=pred,labels=y))
+    cost=tf.add_n([cost1])
+    train_opt=tf.train.FtrlOptimizer(learning_rate).minimize(cost)
+    time_start=time.time()
+
+    #会话
+    with tf.Session() as sess:
+        sess.run(tf.global_variables_initializer())#初始化 
+        train_dict={x:train_x,y:train_y}
+        for epoch in range(500):
+
+            _,cost_train,pred_train=sess.run([train_opt,cost,pred],feed_dict=train_dict)
+            train_auc=roc_auc_score(train_y,pred_train)
+            time_end=time.time()
+            test_dict={x:test_x,y:test_y}
+            result=[]
+            if epoch %100==0:
+                _,cost_test,pred_test=sess.run([train_opt,cost,pred],feed_dict=test_dict)
+                test_auc=roc_auc_score(test_y,pred_test)
+                print("epoch:%d,time:%d,train_auc:%f,test_auc:%f"%(epoch,(time_end-time_start),train_auc,test_auc))
+                result.append([epoch,pred_test,train_auc,test_auc])
+    return result
+
+train_and_test(train_data,test_data,m=2,learning_rate=0.1)
