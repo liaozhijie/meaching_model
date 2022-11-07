@@ -1,0 +1,189 @@
+# product层实现
+class ProductLayer(keras.layers.Layer):
+    def __init__(self, units, use_inner=True, use_outer=False, **kwargs):
+        super(ProductLayer, self).__init__(**kwargs)
+        self.units = units # 论文中D1
+        self.use_inner = use_inner
+        self.use_outer = use_outer
+
+    #build在执行call函数时执行一次，获得输入的形状；
+    #定义输入X时为列表，每个元素为一个类别的Embeding所以，每个元素的形状为(batch_size, 1, emb_dim)，因此没有被flatten
+    def build(self, input_shape):
+        self.feat_nums = len(input_shape) # 列表长度为所有类别
+        self.embed_dims = input_shape[0].as_list()[-1] # (batch_size, 1, emb_dim)
+        flatten_dims = self.feat_nums * self.embed_dims
+        
+        self.linear_w = self.add_weight(name='linear_w', shape=(flatten_dims, self.units), initializer='glorot_normal')
+
+        if self.use_inner:
+            # 优化之后的内积权重是未优化时的一个分解矩阵，未优化时的矩阵大小为：D x N x N 
+            # 优化后的内积权重大小为：D x N
+            self.inner_w = self.add_weight(name='inner_w', shape=(self.units, self.feat_nums), initializer='glorot_normal')
+        if self.use_outer:
+            # 优化为 每个向量矩阵 外积权重大小为：D x M x M
+            self.outer_w = self.add_weight(name='outer_w', shape=(self.units, self.embed_dims, self.embed_dims), initializer='glorot_normal')
+
+    def call(self, inputs):
+        concat_emb = tf.concat(inputs, axis=1) # B* feat_nums*emb_dim
+        # lz
+        _concat_emb = tf.reshape(concat_emb, shape=[-1, self.feat_nums*self.embed_dims])
+        lz = tf.matmul(_concat_emb, self.linear_w) # B * D1
+
+        #lp: 一个元素一个元素的计算
+        lp_list = []
+        #inner： 每个元素都是内积成权重的结果
+        if self.use_inner:
+            for i in range(self.units):
+                # self.inner_w[i] : (embed_dims, ) 添加一个维度变成 (embed_dims, 1)
+                lpi = tf.multiply(concat_emb, tf.expand_dims(self.inner_w[i], axis=1)) # 论文的delta:B * feat_nums* emb_dims
+                # 求范数：先求和再开方
+                lpi = tf.reduce_sum(lpi, axis=1) # B * emb_dims
+                lpi = tf.square(lpi) # B * emb_dims A Tensor. Has the same type as x.
+                lpi = tf.reduce_sum(lpi, axis=1, keepdims=True) # B * 1 这里没有再次进行开方，因为不影响结果, 必须要有keepdims=True参数否则维度变成B
+                lp_list.append(lpi)
+        #outer: 每个元素都是 特征维度求和的外积 乘以权重
+        if self.use_outer:
+            feat_sum = tf.reduce_sum(concat_emb, axis=1) # B*emb_dims
+            # 为了求外积，构造转置向量
+            f1 = tf.expand_dims(feat_sum, axis=1) # B* 1* emb_dims
+            f2 = tf.expand_dims(feat_sum, axis=2) # B* emb_dims * 1
+            # 外积
+            product = tf.matmul(f2, f1) # B * emb_dims * emb_dims
+            for in range(self.units):
+                # self.outer_w[i] 为emb_dims * emb_dims不必增添维度
+                lpi = tf.multiply(product, self.outer_w[i]) # B * emb_dims * emb_dims
+                # 求和
+                lpi = tf.reduce_sum(lpi, axis=[1,2]) # 把emb_dims压缩下去 (B,)
+                # 没法连接
+                lpi = tf.expand_dims(lpi, axis=1) # B * 1
+                lp_list.append(lpi)
+        lp = tf.concat(lp_list, axis=1)
+
+        product_out = tf.concat([lz, lp], axis=1)
+        return product_out
+        
+        
+from collections import namedtuple
+SparseFeat = namedtuple('SparseFeat', ['name', 'vocabulary_size', 'embedding_size'])
+DenseFeat = namedtuple('DenseFeat', ['name', 'dimension'])
+
+
+# 构建Input字典：每个输入特征构成一个Input，方便对不同的特征输入
+def build_input_layers(feat_cols):
+    """
+    feat_cols是列表，每个元素都是namedtuple表征是否是稀疏向量
+    return： 稠密和稀疏两个字典
+    """
+    sparse_dict, dense_dict = dict(), dict()
+    
+    for fc in feat_cols:
+        if isinstance(fc, DenseFeat):
+            dense_dict[fc.name] = keras.Input(shape=(1, ), name=fc.name)
+        if isinstance(fc, SparseFeat):
+            sparse_dict[fc.name] = keras.Input(shape=(1, ), name=fc.name)
+    return dense_dict, sparse_dict
+    
+    
+    
+# 构建emb层和输出列表
+def build_emb_layers(feat_cols):
+    """
+    返回emb字典
+    """ 
+    emb_dict = {}
+    #使用python内建函数，filter过滤出稀疏特征来进行Embedding
+    sparse_feat = list(filter(lambda fc: isinstance(fc, SparseFeat), feat_cols)) if feat_cols else []
+    for fc in sparse_feat:
+        emb_dict[fc.name] = keras.layers.Embedding(input_dim=fc.vocabulary_size+1,
+                                                   output_dim=fc.embedding_size,
+                                                   name='emb_' + fc.name)
+    return emb_dict
+
+
+def concat_emb_layers(feat_cols, input_layer_dict, emb_layer_dict, flattern=False) :
+    """
+    将输入层 经过emb层得到最终的输出
+    """
+    sparse_feat = list(filter(isinstance(lambda fc: fc, SparseFeat), feat_cols)) if feat_cols else []
+    emb_list = []
+    for fc in sparse_feat:
+        _input = input_layer_dict[fc.name] # 1 * None
+        _emb = emb_layer_dict[fc.name] # B*1*emb_dim
+        embed = _emb(_input)
+
+        if flattern:
+            embed = keras.layers.Flatten()(embed)
+        emb_list.append(embed)
+    
+    return emb_list
+
+
+def get_dnn_logit(dnn_inputs, units=(64, 32)):
+    """
+    MLP的部分，以及最终的评分函数
+    """
+    dnn_out = dnn_inputs
+    for unit in units:
+        dnn_out = keras.layers.Dense(unit, activation='relu')(dnn_out) # 不需要指定input_shape，Input里已经有了
+
+    logit = keras.layers.Dense(1, activation='sigmoid')(dnn_out)
+
+    return logit
+    
+    
+    
+    
+def PNN(feat_cols, dnn_units=(64, 32), D1=32, inner=True, outer=False) :
+    dense_input_dict, sparse_input_dict = build_input_layers(feat_cols)
+    #Model的参数中 inputs是列表 和outputs
+    input_layers = list(sparse_input_dict.values())
+
+    # 前向过程
+    emb_dict = build_emb_layers(feat_cols)
+    emb_list = concat_emb_layers(feat_cols,sparse_input_dict, emb_dict, flattern=True) # 测试True的效果
+    dnn_inputs = ProductLayer(units=D1, use_inner=inner, use_outer=outer)(emb_list)
+    output_layer = get_dnn_logit(dnn_inputs, units=dnn_units)
+
+    model = keras.layers.Model(input_layers, output_layer)
+    return model
+    
+    
+def data_process(data_df, dense_features, sparse_features):
+    data_df[dense_features] = data_df[dense_features].fillna(0.0)
+    for f in dense_features:
+        data_df[f] = data_df[f].apply(lambda x: np.log(x+1) if x > -1 else -1)
+        
+    data_df[sparse_features] = data_df[sparse_features].fillna("-1")
+    for f in sparse_features:
+        lbe = LabelEncoder()
+        data_df[f] = lbe.fit_transform(data_df[f])
+    
+    return data_df[dense_features + sparse_features + ['label']]
+
+
+
+if __name__ == '__main__':
+  path = 'criteo_sample.txt'
+  data = pd.read_csv(path)
+  columns = data.columns.values() # ndarray
+  dense_feats = [feat for feat in columns if 'I' in feat]
+  sparse_feats = [feat for feat in columns if 'C' in feat]
+  # 数据处理
+  train_data = data_process(data, dense_feats, sparse_feats)
+  #传入类别特征
+  dnn_feat_cols = [SparseFeat(feat, vocabulary_size=data[feat].nunique(), embedding_size=4) for feat insparse_feats]
+  # 构建模型
+  history = PNN(dnn_feat_cols)
+  history.compile(optimizer="adam", loss="binary_crossentropy", metrics=['auc', 'binary_crossentropy'])
+  train_inputs = {name: data[name] for name in dense_feats+sparse_feats}
+  history.fit(train_inputs, train_data['label'].values,
+      batch_size=64, epochs=5, validation_split=0.2, )
+
+
+
+
+
+
+
+
+
