@@ -67,29 +67,22 @@ class DIN(tf.keras.Model):
         queries_hidden_units = queries.shape[-1]
         # 每个历史记录的物品embed都需要与候选物品的embed拼接，故候选物品embed重复keys.shape[1]次
         # keys.shape[1]为最大的序列长度，即431，为了方便矩阵计算
-        # [None, 431 * hidden_unit * 2]
         queries = tf.tile(queries, [1, keys.shape[1]])
         # 重塑候选物品embed的shape
-        # [None, 431, hidden_unit * 2]
         queries = tf.reshape(queries, [-1, keys.shape[1], queries_hidden_units])
-        # 拼接候选物品embed与hist物品embed
-        # [None, 431, hidden * 2 * 4]
+        # 拼接候选物品embed与hist物品embed, 以及内外积
         embed = tf.concat([queries, keys, queries - keys, queries * keys], axis=-1)
         # 全连接, 得到权重W
         d_layer_1 = self.att_dense1(embed)
         d_layer_2 = self.att_dense2(d_layer_1)
-        # [None, 431, 1]
         d_layer_3 = self.att_dense3(d_layer_2)
         # 重塑输出权重类型, 每个hist物品embed有对应权重值
-        # [None, 1, 431]
         outputs = tf.reshape(d_layer_3, [-1, 1, keys.shape[1]])
 
         # Mask
         # 此处将为历史记录的物品embed令为True
-        # [None, 431]
         key_masks = tf.sequence_mask(keys_length, keys.shape[1])
         # 增添维度
-        # [None, 1, 431]
         key_masks = tf.expand_dims(key_masks, 1)
         # 填充矩阵
         paddings = tf.ones_like(outputs) * (-2 ** 32 + 1)
