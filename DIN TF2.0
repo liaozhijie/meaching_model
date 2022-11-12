@@ -1,4 +1,4 @@
-
+# attention weight 可以直接由dot product得出（默认向量的每个维度的权重一样，实际不一样），经过MLP训练能更准确。
 
 class DIN(tf.keras.Model):
     def __init__(self, user_num, item_num, cate_num, cate_list, hidden_units):
