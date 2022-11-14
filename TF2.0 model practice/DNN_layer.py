@@ -105,3 +105,53 @@ def train_model(model,epochs):
         
 
 train_model(model,epochs = 600)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+'''
+import tensorflow as tf
+from tensorflow.keras.layers import Layer, Dense, Embedding
+from tensorflow.keras.models import Model
+import numpy as np
+import pandas as pd
+
+
+class dnn_layer(Layer):
+    def __init__(self, unit, activation, output_dim):
+        super(dnn_layer, self).__init__()
+        self.unit = unit
+        self.activation = activation
+        self.output_dim = output_dim
+
+        self.dense_list = [Dense(i, activation = self.activation) for i in self.unit]
+        self.output_layer = Dense(self.output_dim, activation = None)
+
+    def call(self, input):
+        x = input
+        for dense in self.dense_list:
+            x = dense(x)
+        output = self.output_layer(x)
+        return output
+
+
+class model(Model):
+    def __init__(self, unit, activation, output_dim):
+        super(model, self).__init__()
+        self.fm = dnn_layer(unit, activation, output_dim)
+
+    def call(self, input):
+        fm_out = self.fm(input)
+        return tf.nn.sigmoid(fm_out)
+'''
