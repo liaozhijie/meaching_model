@@ -53,7 +53,7 @@ class WDL(Layer):
         dnn_output = self.dnn(emb_output)
         dnn_output = tf.keras.layers.Flatten()(dnn_output)
         model = Concatenate(axis=1)([liner_output, dnn_output])
-        return self.dense1(liner_output)
+        return self.dense1(model)
 
 
 class model(Model):
